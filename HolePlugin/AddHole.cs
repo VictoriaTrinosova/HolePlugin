@@ -1,6 +1,7 @@
 ﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Mechanical;
+using Autodesk.Revit.DB.Plumbing;
 using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using System;
@@ -41,6 +42,11 @@ namespace HolePlugin
                 .OfType<Duct>()
                 .ToList();
 
+            List<Pipe> pipes = new FilteredElementCollector(ovDoc)
+                .OfClass(typeof(Pipe))
+                .OfType<Pipe>()
+                .ToList();
+
             View3D view3D = new FilteredElementCollector(arDoc)
                 .OfClass(typeof(View3D))
                 .OfType<View3D>()
@@ -65,7 +71,35 @@ namespace HolePlugin
 
             Transaction transaction = new Transaction(arDoc);
             transaction.Start("Расстановка отверстий");
-            foreach(Duct d in ducts)
+
+            foreach (Duct d in ducts)
+            {
+                Line curve = (d.Location as LocationCurve).Curve as Line;
+                XYZ point = curve.GetEndPoint(0);
+                XYZ direction = curve.Direction;
+
+                List<ReferenceWithContext> intersections = referenceIntersector.Find(point, direction)
+                    .Where(x => x.Proximity <= curve.Length)
+                    .Distinct(new ReferenceWithContextElementEqualityComparer())
+                    .ToList();
+                foreach (ReferenceWithContext refer in intersections)
+                {
+                    double proximity = refer.Proximity;
+                    Reference reference = refer.GetReference();
+                    Wall wall = arDoc.GetElement(reference.ElementId) as Wall;
+                    Level level = arDoc.GetElement(wall.LevelId) as Level;
+                    XYZ pointHole = point + (direction * proximity);
+
+                    FamilyInstance hole = arDoc.Create.NewFamilyInstance(pointHole, familySymbol, wall, level, StructuralType.NonStructural);
+                    Parameter width = hole.LookupParameter("Ширина");
+                    Parameter height = hole.LookupParameter("Высота");
+                    width.Set(d.Diameter);
+                    height.Set(d.Diameter);
+                }
+
+            }
+
+            foreach (Pipe d in pipes)
             {
                 Line curve = (d.Location as LocationCurve).Curve as Line;
                 XYZ point = curve.GetEndPoint(0);
@@ -93,6 +127,7 @@ namespace HolePlugin
             transaction.Commit();
             return Result.Succeeded;
         }
+
         public class ReferenceWithContextElementEqualityComparer : IEqualityComparer<ReferenceWithContext>
         {
             public bool Equals(ReferenceWithContext x, ReferenceWithContext y)
